@@ -30,7 +30,8 @@ jobs:
       # GRF Editor and GrfCL reference the prebuilt DLLs in Libraries\ and embed the
       # committed copies in Files\. The pre-build events expect the author's folder
       # layout (..\Libraries, ..\Librairies), so they are skipped and ReferencePath
-      # points at Libraries\ instead.
+      # points at Libraries\ instead. The runner has no 3.5 Client Profile reference
+      # assemblies, so the full 3.5 profile (a superset) is used.
       - name: Build
         shell: pwsh
         run: |
@@ -39,7 +40,7 @@ jobs:
             msbuild $proj -nologo -v:m -restore:false `
               -p:Configuration=Release -p:Platform=x86 `
               "-p:SolutionDir=$root" "-p:ReferencePath=${root}Libraries" `
-              -p:PreBuildEvent= -p:PostBuildEvent=
+              -p:PreBuildEvent= -p:PostBuildEvent= -p:TargetFrameworkProfile=
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
 
