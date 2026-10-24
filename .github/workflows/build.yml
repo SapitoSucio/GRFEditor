@@ -1,0 +1,76 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      # The projects target .NET Framework 3.5 (WPF Client Profile).
+      - name: Ensure .NET Framework 3.5
+        shell: pwsh
+        run: |
+          $ndp = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\NET Framework Setup\NDP\v3.5' -ErrorAction SilentlyContinue
+          if ($ndp.Install -ne 1) {
+            Install-WindowsFeature Net-Framework-Core
+          }
+
+      - uses: microsoft/setup-msbuild@v2
+
+      # GRF Editor and GrfCL reference the prebuilt DLLs in Libraries\ and embed the
+      # committed copies in Files\. The pre-build events expect the author's folder
+      # layout (..\Libraries, ..\Librairies), so they are skipped and ReferencePath
+      # points at Libraries\ instead.
+      - name: Build
+        shell: pwsh
+        run: |
+          $root = "$env:GITHUB_WORKSPACE\"
+          foreach ($proj in 'GRFEditor\GRFEditor.csproj', 'GrfCL\GrfCL.csproj') {
+            msbuild $proj -nologo -v:m -restore:false `
+              -p:Configuration=Release -p:Platform=x86 `
+              "-p:SolutionDir=$root" "-p:ReferencePath=${root}Libraries" `
+              -p:PreBuildEvent= -p:PostBuildEvent=
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $version = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME } else { "dev-$($env:GITHUB_SHA.Substring(0, 7))" }
+          "VERSION=$version" >> $env:GITHUB_ENV
+
+          New-Item -ItemType Directory dist\GRFEditor | Out-Null
+          Copy-Item 'GRFEditor\bin\Release\GRF Editor.exe', 'GRFEditor\bin\Release\GRF Editor.exe.config', `
+                    'GrfCL\bin\Release\GrfCL.exe', 'GrfCL\bin\Release\GrfCL.exe.config', `
+                    'GRFEditor\Resources\app.ico' dist\GRFEditor
+          Compress-Archive dist\GRFEditor\* "dist\GRFEditor-$version-portable.zip"
+
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress }
+          & $iscc /Q "/O$env:GITHUB_WORKSPACE\dist" "/FGRFEditor-$version-setup" GrfEditor.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: GRFEditor-${{ env.VERSION }}
+          path: |
+            dist/*.zip
+            dist/*.exe
+
+      - name: Publish release
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create $env:GITHUB_REF_NAME dist\*.zip dist\*.exe --title $env:GITHUB_REF_NAME --generate-notes
